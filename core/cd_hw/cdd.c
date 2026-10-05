@@ -285,7 +285,8 @@ int cdd_context_save(uint8 *state)
 
 int cdd_context_load(uint8 *state, char *version)
 {
-  unsigned int offset, lba, index;
+  unsigned int offset, index;
+  int lba;
   int bufferptr = 0;
   uint8 tmp8;
 
@@ -305,6 +306,16 @@ int cdd_context_load(uint8 *state, char *version)
   if (index > cdd.toc.last)
   {
     return 0;
+  }
+
+  /* keep restored sector position within valid disc limits */
+  if (lba < -150)
+  {
+    lba = -150;
+  }
+  else if (lba > cdd.toc.end)
+  {
+    lba = cdd.toc.end;
   }
 
   /* update current sector */
@@ -357,8 +368,8 @@ int cdd_context_load(uint8 *state, char *version)
 #if defined(USE_LIBCHDR)
       if (cdd.chd.file)
       {
-        /* CHD file offset */
-        cdd.chd.hunkofs = offset;
+        /* CHD file offset (aligned to 16-bit stereo samples) */
+        cdd.chd.hunkofs = offset & 0xfffffffc;
       }
       else
 #endif
@@ -574,7 +585,7 @@ int cdd_load(char *filename, char *header)
     }
 
     /* valid CD image ? */
-    if (cdd.toc.last && (cdd.toc.end < (100*60*75)))
+    if (cdd.toc.last && (cdd.toc.end <= (99*60*75)))
     {
       /* Lead-out */
       cdd.toc.tracks[cdd.toc.last].start = cdd.toc.end;
@@ -1286,7 +1297,7 @@ int cdd_load(char *filename, char *header)
   }
 
   /* CD tracks found ? */
-  if (cdd.toc.last)
+  if (cdd.toc.last && (cdd.toc.end <= (99*60*75)))
   {
     /* Lead-out */
     cdd.toc.tracks[cdd.toc.last].start = cdd.toc.end;
@@ -1525,7 +1536,10 @@ void cdd_read_audio(unsigned int samples)
         /* update CHD hunk cache if necessary */
         if (hunknum != cdd.chd.hunknum)
         {
-          chd_read(cdd.chd.file, hunknum, cdd.chd.hunk);
+          if (chd_read(cdd.chd.file, hunknum, cdd.chd.hunk) != CHDERR_NONE)
+          {
+            memset(cdd.chd.hunk, 0, cdd.chd.hunkbytes);
+          }
           cdd.chd.hunknum = hunknum;
         }
 
@@ -1557,7 +1571,7 @@ void cdd_read_audio(unsigned int samples)
         cdd.chd.hunkofs += 4;
 
         /* detect end of sector data (2352 bytes) */
-        if ((cdd.chd.hunkofs % CD_FRAME_SIZE) == CD_MAX_SECTOR_DATA)
+        if ((cdd.chd.hunkofs % CD_FRAME_SIZE) >= CD_MAX_SECTOR_DATA)
         {
           /* skip subcode data (96 bytes) */
           cdd.chd.hunkofs += CD_MAX_SUBCODE_DATA;
@@ -1961,6 +1975,12 @@ void cdd_update(void)
                (scd.regs[0x46>>1].byte.h * 10 + scd.regs[0x46>>1].byte.l)) * 75 +
                (scd.regs[0x48>>1].byte.h * 10 + scd.regs[0x48>>1].byte.l) - 150;
 
+    /* stay within the mounted disc */
+    if (lba > cdd.toc.end)
+    {
+      lba = cdd.toc.end;
+    }
+
     /* CD drive latency */
     if (!cdd.latency)
     {
@@ -2168,7 +2188,19 @@ void cdd_process(void)
         case 0x05:  /* Track Start Time (MM:SS:FF) */
         {
           int track = scd.regs[0x46>>1].byte.h * 10 + scd.regs[0x46>>1].byte.l;
-          int lba = cdd.toc.tracks[track-1].start + 150;
+          int lba;
+
+          if ((track < 1) || (track > cdd.toc.last))
+          {
+            scd.regs[0x38>>1].w = (cdd.status << 8) | 0x05;
+            scd.regs[0x3a>>1].w = 0x0000;
+            scd.regs[0x3c>>1].w = 0x0000;
+            scd.regs[0x3e>>1].w = 0x0000;
+            scd.regs[0x40>>1].byte.h = 0x00;
+            break;
+          }
+
+          lba = cdd.toc.tracks[track-1].start + 150;
           scd.regs[0x38>>1].w = (cdd.status << 8) | 0x05;
           scd.regs[0x3a>>1].w = lut_BCD_16[(lba/75)/60];
           scd.regs[0x3c>>1].w = lut_BCD_16[(lba/75)%60];
