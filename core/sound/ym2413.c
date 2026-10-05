@@ -1827,3 +1827,44 @@ unsigned int YM2413GetContextSize(void)
 {
   return sizeof(YM2413);
 }
+
+void YM2413RestoreContext(void)
+{
+  int c, s;
+  UINT32 lfo_am_period = (UINT32)LFO_AM_TAB_ELEMENTS << LFO_SH;
+
+  /* rebuild configuration-derived tables and timing values */
+  OPLL_initalize();
+  ym2413.lfo_am_cnt %= lfo_am_period;
+  ym2413.eg_timer %= ym2413.eg_timer_overflow;
+  ym2413.noise_p &= FREQ_MASK;
+  ym2413.status &= 1;
+
+  for (c=0; c<9; c++)
+  {
+    YM2413_OPLL_CH *CH = &ym2413.P_CH[c];
+    CH->block_fnum &= 0x0fff;
+    CH->kcode &= 0x0f;
+
+    for (s=0; s<2; s++)
+    {
+      YM2413_OPLL_SLOT *SLOT = &CH->SLOT[s];
+      if ((SLOT->KSR != 0) && (SLOT->KSR != 2)) SLOT->KSR = 2;
+      if (SLOT->ar > 76) SLOT->ar = 0;
+      if (SLOT->dr > 76) SLOT->dr = 0;
+      if (SLOT->rr > 76) SLOT->rr = 0;
+      if (SLOT->ksl > 31) SLOT->ksl = 31;
+      if ((SLOT->fb_shift != 0) &&
+          ((SLOT->fb_shift < 9) || (SLOT->fb_shift > 15)))
+      {
+        SLOT->fb_shift = 0;
+      }
+      if ((SLOT->wavetable != 0) && (SLOT->wavetable != SIN_LEN))
+      {
+        SLOT->wavetable = 0;
+      }
+      SLOT->ksr = 0xff;
+      CALC_FCSLOT(CH, SLOT);
+    }
+  }
+}
